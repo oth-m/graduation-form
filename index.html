@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>استمارة حجز زي التخرج</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bgMain: '#121212', bgCard: '#1b1b1d', bgInput: '#26262a', bgInput2: '#2f2f34',
+        borderGray: '#3f3f46', borderLight: '#52525b',
+        textPrimary: '#f4f4f5', textSecondary: '#a1a1aa', textMuted: '#71717a',
+        btnGray: '#3f3f46', btnHover: '#52525b', btnLight: '#5a5a63'
+      },
+      fontFamily: { cairo: ['Cairo','sans-serif'] }
+    }
+  }
+}
+</script>
+<style>
+  * { font-family: 'Cairo', sans-serif; }
+  body { background:#121212; color:#f4f4f5; }
+  .input-field { transition: all .25s ease; }
+  .input-field:focus { outline:none; border-color:#71717a; box-shadow:0 0 0 1px #71717a; }
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
+  .opt-btn input:checked + div { background:#52525b; border-color:#a1a1aa; color:#fff; font-weight:700; box-shadow: inset 0 0 0 1px #a1a1aa; }
+  .opt-btn div { transition: all .2s ease; }
+  .tab-btn.active { background:#3f3f46; color:#fff; }
+  .scrollbar-thin::-webkit-scrollbar{width:6px;height:6px;}
+  .scrollbar-thin::-webkit-scrollbar-thumb{background:#3f3f46;border-radius:10px;}
+  .fade-in { animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
+  .badge { font-size:11px; padding:2px 10px; border-radius:999px; border:1px solid #3f3f46; }
+  .thumb { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid #3f3f46; }
+  ::selection { background:#52525b; }
+  .spinner { border:2px solid #3f3f46; border-top-color:#f4f4f5; border-radius:50%; width:16px; height:16px; animation:spin .7s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #printArea { display:none; }
+  @media print {
+    body.printing > *:not(#printArea) { display:none !important; }
+    body.printing #printArea {
+      display:block !important; background:#fff; color:#000; padding:24px; font-family:'Cairo',sans-serif;
+    }
+    body.printing #printArea * { color:#000 !important; }
+    body.printing #printArea table { width:100%; border-collapse:collapse; }
+    body.printing #printArea td, body.printing #printArea th { border:1px solid #999; padding:6px 10px; text-align:right; font-size:13px; }
+    body.printing #printArea h1 { font-size:20px; margin-bottom:4px; }
+    body.printing #printArea h2 { font-size:15px; margin:16px 0 6px; border-bottom:1px solid #999; padding-bottom:4px; }
+    body.printing img { max-width:120px; max-height:120px; margin:4px; border:1px solid #999; }
+  }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 hidden"></div>
+<div id="root" class="p-4 md:p-8 max-w-5xl mx-auto"></div>
+<div id="printArea"></div>
+
+<script>
+/* =====================================================================
+   إعداد الاتصال بـ Supabase
+===================================================================== */
+const SUPABASE_URL = 'https://ccywrqmlgzhiotfrulkg.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_uh7HWDqd5u324Nyz78etkA_3KxI00yD';
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
+
+const SCARF_FIXED_COLOR = 'ماروني';
+
+function toast(msg, ms){
+  const t = document.getElementById('toast');
+  t.innerHTML = `<div class="bg-bgInput2 border border-borderLight text-textPrimary px-5 py-3 rounded-xl shadow-2xl font-bold text-sm">${msg}</div>`;
+  t.classList.remove('hidden');
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(()=> t.classList.add('hidden'), ms||2500);
+}
+
+/* =====================================================================
+   الحالة العامة
+===================================================================== */
+let STATE = {
+  authUser: null,
+  user: null,
+  view: 'auth',
+  submission: null,
+  submissionId: null,
+  submittedOnce: false,
+  editingUnlocked: false,
+  adminList: [],
+  assistants: [],
+  logs: [],
+  adminTab: 'subs',
+  activeSubmission: null,
+  activeRerender: null,
+  editingId: null
+};
+
+function emptySubmission(name){
+  return {
+    student_name: name || '',
+    pieces: [],
+    robe: { color:'', model:'', frameInSleeve:'', totalLength:'', shoulder:'', armLength:'', chest:'', notes:'', images:[] },
+    cap:  { collarType:'', color:'', embroideryColor:'', embroideryLocation:'', headSize:'', notes:'', images:[] },
+    scarf:{ type:'', color: SCARF_FIXED_COLOR, embroideryColor:'', textRight:'', textLeft:'', textBack:'', notes:'', images:[] },
+    general: { notes:'', images:[] },
+    status: 'submitted'
+  };
+}
+
+function normalizeName(n){ return (n||'').trim().replace(/\s+/g,' '); }
+
+async function logActivity(action, targetStudent, details){
+  try{
+    await sb.from('activity_logs').insert({
+      actor_name: STATE.user ? STATE.user.name : targetStudent,
+      actor_role: STATE.user ? STATE.user.role : 'member',
+      action, target_student: targetStudent, details: details || {}
+    });
+  }catch(e){ console.error('log error', e); }
+}
+
+/* =====================================================================
+   ضغط ورفع الصور إلى Supabase Storage
+===================================================================== */
+function compressImageToBlob(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const maxW = 1000;
+        let w = img.width, h = img.height;
+        if(w > maxW){ h = Math.round(h * (maxW/w)); w = maxW; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.72);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadImageFile(file, folder){
+  const blob = await compressImageToBlob(file);
+  const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
+  const { error } = await sb.storage.from('submission-images').upload(path, blob, { contentType: 'image/jpeg' });
+  if(error) throw error;
+  const { data } = sb.storage.from('submission-images').getPublicUrl(path);
+  return data.publicUrl;
+}
+
+/* =====================================================================
+   عناصر واجهة قابلة لإعادة الاستخدام
+===================================================================== */
+function fieldLabel(text, required){ return `<label class="block text-sm font-medium mb-2 text-textSecondary">${text}${required ? ' <span class="text-textPrimary">*</span>' : ''}</label>`; }
+function textInput(id, placeholder, value, type){ return `<input id="${id}" type="${type||'text'}" value="${value ? String(value).replace(/"/g,'&quot;') : ''}" placeholder="${placeholder||''}" class="input-field bg-bgInput border border-borderGray text-textPrimary w-full rounded-lg p-3">`; }
+function textArea(id, value, rows){ return `<textarea id="${id}" rows="${rows||2}" class="input-field bg-bgInput border border-borderGray text-textPrimary w-full rounded-lg p-3">${value?String(value).replace(/</g,'&lt;'):''}</textarea>`; }
+function readOnlyField(value){ return `<div class="bg-bgInput/60 border border-borderGray text-textSecondary w-full rounded-lg p-3">${value}</div>`; }
+function selectField(id, options, value){
+  let opts = `<option value="">اختر...</option>`;
+  options.forEach(o=>{ opts += `<option value="${o}" ${o===value?'selected':''}>${o}</option>`; });
+  return `<select id="${id}" class="input-field bg-bgInput border border-borderGray text-textPrimary w-full rounded-lg p-3 cursor-pointer">${opts}</select>`;
+}
+function pillGroup(name, options, selectedValues){
+  return `<div class="flex flex-wrap gap-3" data-group="${name}">` + options.map(o=>{
+    const checked = (selectedValues||[]).includes(o);
+    return `<label class="opt-btn cursor-pointer">
+      <input type="checkbox" class="hidden" data-name="${name}" value="${o}" ${checked?'checked':''} onchange="onPillChange(event)">
+      <div class="border border-borderGray rounded-full px-5 py-2 text-sm text-textSecondary">${o}</div>
+    </label>`;
+  }).join('') + `</div>`;
+}
+function radioPillGroup(name, options, value){
+  return `<div class="flex flex-wrap gap-3" data-group="${name}">` + options.map(o=>{
+    const checked = value === o;
+    return `<label class="opt-btn cursor-pointer">
+      <input type="radio" name="${name}" class="hidden" value="${o}" ${checked?'checked':''} onchange="onRadioChange('${name}','${o}')">
+      <div class="border border-borderGray rounded-full px-5 py-2 text-sm text-textSecondary">${o}</div>
+    </label>`;
+  }).join('') + `</div>`;
+}
+function sectionCard(title, imgB64, imgAlt, innerHtml){
+  return `
+  <section class="mb-8 border-b border-borderGray pb-8">
+    <h3 class="text-lg font-bold text-textPrimary mb-4">${title}</h3>
+    ${imgB64 ? `
+    <div class="mb-6 bg-bgInput/60 p-4 rounded-xl border border-borderGray text-center">
+      <img src="${imgB64}" alt="${imgAlt}" class="mx-auto max-h-72 rounded-lg object-contain">
+    </div>` : ''}
+    ${innerHtml}
+  </section>`;
+}
+function imagesUploader(sectionKey){
+  const imgs = getSectionImages(sectionKey);
+  const thumbs = imgs.map((src,i)=>`
+    <div class="relative">
+      <img src="${src}" class="thumb">
+      <button onclick="removeImage('${sectionKey}',${i})" class="absolute -top-2 -left-2 bg-bgInput2 border border-borderLight text-textPrimary w-6 h-6 rounded-full text-xs font-bold">×</button>
+    </div>`).join('');
+  return `
+  <div class="bg-bgInput/60 p-4 rounded-xl border border-borderGray">
+    <div class="flex flex-wrap gap-3 mb-3">${thumbs || '<p class="text-xs text-textMuted">لا توجد صور مرفقة بعد</p>'}</div>
+    <input type="file" multiple accept="image/*" onchange="onImagesSelected(event,'${sectionKey}')" class="text-xs text-textSecondary file:ml-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-btnGray file:text-white hover:file:bg-btnHover w-full cursor-pointer">
+    <p class="text-[11px] text-textMuted mt-2">يمكن اختيار أكثر من صورة دفعة واحدة</p>
+  </div>`;
+}
+function getSectionImages(sectionKey){
+  const s = STATE.activeSubmission;
+  if(sectionKey==='robe') return s.robe.images;
+  if(sectionKey==='cap') return s.cap.images;
+  if(sectionKey==='scarf') return s.scarf.images;
+  return s.general.images;
+}
+async function onImagesSelected(ev, sectionKey){
+  const files = Array.from(ev.target.files || []);
+  if(!files.length) return;
+  collectFormValues();
+  toast('جاري رفع الصور...', 4000);
+  for(const f of files){
+    try{
+      const url = await uploadImageFile(f, sectionKey);
+      getSectionImages(sectionKey).push(url);
+    }catch(e){ console.error(e); toast('تعذّر رفع إحدى الصور'); }
+  }
+  toast('تم رفع الصور ✓');
+  STATE.activeRerender && STATE.activeRerender();
+}
+function removeImage(sectionKey, idx){
+  collectFormValues();
+  getSectionImages(sectionKey).splice(idx,1);
+  STATE.activeRerender && STATE.activeRerender();
+}
+function onPillChange(ev){
+  const name = ev.target.dataset.name;
+  const val = ev.target.value;
+  if(name === 'pieces'){
+    const s = STATE.activeSubmission;
+    if(ev.target.checked){ if(!s.pieces.includes(val)) s.pieces.push(val); }
+    else { s.pieces = s.pieces.filter(p=>p!==val); }
+  }
+}
+function onRadioChange(name, val){
+  const s = STATE.activeSubmission;
+  if(name==='robeFrame') s.robe.frameInSleeve = val;
+}
+function collectFormValues(){
+  const s = STATE.activeSubmission;
+  if(!s) return;
+  const g = id => document.getElementById(id);
+  if(g('f_name')) s.student_name = g('f_name').value;
+  if(g('r_color')) s.robe.color = g('r_color').value;
+  if(g('r_model')) s.robe.model = g('r_model').value;
+  if(g('r_total')) s.robe.totalLength = g('r_total').value;
+  if(g('r_shoulder')) s.robe.shoulder = g('r_shoulder').value;
+  if(g('r_arm')) s.robe.armLength = g('r_arm').value;
+  if(g('r_chest')) s.robe.chest = g('r_chest').value;
+  if(g('r_notes')) s.robe.notes = g('r_notes').value;
+  if(g('c_collar')) s.cap.collarType = g('c_collar').value;
+  if(g('c_color')) s.cap.color = g('c_color').value;
+  if(g('c_embcolor')) s.cap.embroideryColor = g('c_embcolor').value;
+  if(g('c_embloc')) s.cap.embroideryLocation = g('c_embloc').value;
+  if(g('c_head')) s.cap.headSize = g('c_head').value;
+  if(g('c_notes')) s.cap.notes = g('c_notes').value;
+  s.scarf.color = SCARF_FIXED_COLOR; // لون الوشاح ثابت دائماً
+  if(g('sc_type')) s.scarf.type = g('sc_type').value;
+  if(g('sc_embcolor')) s.scarf.embroideryColor = g('sc_embcolor').value;
+  if(g('sc_right')) s.scarf.textRight = g('sc_right').value;
+  if(g('sc_left')) s.scarf.textLeft = g('sc_left').value;
+  if(g('sc_back')) s.scarf.textBack = g('sc_back').value;
+  if(g('sc_notes')) s.scarf.notes = g('sc_notes').value;
+  if(g('gen_notes')) s.general.notes = g('gen_notes').value;
+}
+
+/* =====================================================================
+   شاشة البداية
+===================================================================== */
+function renderAuth(){
+  const root = document.getElementById('root');
+  root.innerHTML = `
+  <div class="fade-in">
+    <header class="text-center mb-8">
+      <div class="mx-auto w-16 h-16 rounded-full border border-borderGray flex items-center justify-center mb-4">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="1.5"><path d="M12 3L2 8l10 5 10-5-10-5z"/><path d="M6 10.5V15c0 1.5 3 3 6 3s6-1.5 6-3v-4.5"/></svg>
+      </div>
+      <h1 class="text-2xl font-extrabold">استمارة حجز زي التخرج</h1>
+      <p class="text-textSecondary text-sm mt-1">أدخل اسمك الثلاثي لتعبئة استمارتك أو متابعة طلبك</p>
+    </header>
+
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 md:p-8 max-w-md mx-auto shadow-xl">
+      <div class="space-y-4">
+        <div>${fieldLabel('الاسم الثلاثي', true)}${textInput('name_entry','الاسم كما هو معتمد')}</div>
+        <button id="enterBtn" onclick="doEnter()" class="bg-btnGray hover:bg-btnHover text-white font-bold py-3 rounded-lg w-full transition-colors">دخول</button>
+      </div>
+    </div>
+
+    <p class="text-center mt-6">
+      <button onclick="STATE.view='adminLogin'; renderAdminLogin();" class="text-xs text-textMuted hover:text-textPrimary underline">دخول القائد / القائد المساعد</button>
+    </p>
+  </div>`;
+  setTimeout(()=> document.getElementById('name_entry')?.focus(), 50);
+  const inp = document.getElementById('name_entry');
+  inp && inp.addEventListener('keydown', e=>{ if(e.key==='Enter') doEnter(); });
+}
+
+async function doEnter(){
+  const name = normalizeName(document.getElementById('name_entry').value);
+  if(!name){ toast('الرجاء إدخال الاسم الثلاثي'); return; }
+  const btn = document.getElementById('enterBtn');
+  btn.innerHTML = '<span class="spinner"></span>';
+  try{
+    STATE.user = { name, role: 'member' };
+    STATE.view = 'form';
+    const { data, error } = await sb.from('submissions').select('*').eq('student_name', name).limit(1);
+    if(error) throw error;
+    if(data && data.length){
+      STATE.submission = data[0];
+      if(!STATE.submission.scarf) STATE.submission.scarf = { type:'', color: SCARF_FIXED_COLOR, embroideryColor:'', textRight:'', textLeft:'', textBack:'', notes:'', images:[] };
+      STATE.submission.scarf.color = SCARF_FIXED_COLOR;
+      STATE.submissionId = data[0].id;
+      STATE.submittedOnce = true;
+    } else {
+      STATE.submission = emptySubmission(name);
+      STATE.submissionId = null;
+      STATE.submittedOnce = false;
+    }
+    renderForm();
+  }catch(e){
+    console.error(e);
+    toast('صار خطأ بالاتصال، حاول مرة أخرى');
+    btn.innerHTML = 'دخول';
+  }
+}
+
+function logout(){
+  STATE.user = null; STATE.submission = null; STATE.submissionId = null;
+  STATE.authUser = null; STATE.view = 'auth';
+  renderAuth();
+}
+
+/* =====================================================================
+   دخول القائد / القائد المساعد
+===================================================================== */
+function renderAdminLogin(){
+  const root = document.getElementById('root');
+  root.innerHTML = `
+  <div class="fade-in">
+    <header class="text-center mb-8">
+      <h1 class="text-2xl font-extrabold">دخول لوحة الإدارة</h1>
+      <p class="text-textSecondary text-sm mt-1">للقائد والقادة المساعدين فقط</p>
+    </header>
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 md:p-8 max-w-md mx-auto shadow-xl">
+      <div class="space-y-4">
+        <div>${fieldLabel('البريد الإلكتروني', true)}${textInput('admin_email','name@example.com')}</div>
+        <div>${fieldLabel('كلمة المرور', true)}${textInput('admin_pass','كلمة المرور','', 'password')}</div>
+        <button id="adminLoginBtn" onclick="doAdminLogin()" class="bg-btnGray hover:bg-btnHover text-white font-bold py-3 rounded-lg w-full transition-colors">دخول</button>
+      </div>
+    </div>
+    <p class="text-center mt-6">
+      <button onclick="STATE.view='auth'; renderAuth();" class="text-xs text-textMuted hover:text-textPrimary underline">رجوع لدخول الطلاب</button>
+    </p>
+  </div>`;
+}
+
+async function doAdminLogin(){
+  const email = document.getElementById('admin_email').value.trim();
+  const pass = document.getElementById('admin_pass').value;
+  if(!email || !pass){ toast('أدخل البريد وكلمة المرور'); return; }
+  const btn = document.getElementById('adminLoginBtn');
+  btn.innerHTML = '<span class="spinner"></span>';
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if(error){ toast('بيانات الدخول غير صحيحة'); btn.innerHTML='دخول'; return; }
+    STATE.authUser = data.user;
+    const { data: profile, error: pErr } = await sb.from('profiles').select('*').eq('auth_user_id', data.user.id).limit(1);
+    if(pErr || !profile || !profile.length){
+      toast('حسابك غير مرتبط بأي صلاحية بالنظام');
+      await sb.auth.signOut();
+      btn.innerHTML='دخول';
+      return;
+    }
+    STATE.user = { name: profile[0].full_name, role: profile[0].role };
+    STATE.view = 'admin';
+    toast('مرحباً ' + STATE.user.name);
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){
+    console.error(e);
+    toast('صار خطأ، حاول مرة أخرى');
+    btn.innerHTML = 'دخول';
+  }
+}
+
+/* =====================================================================
+   استمارة الطالب
+===================================================================== */
+function renderForm(){
+  STATE.activeSubmission = STATE.submission;
+  STATE.activeRerender = renderForm;
+  const root = document.getElementById('root');
+  const s = STATE.submission;
+  const locked = STATE.submittedOnce && !STATE.editingUnlocked;
+
+  root.innerHTML = `
+  <div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <div class="text-sm text-textSecondary">مرحباً، <span class="text-textPrimary font-bold">${STATE.user.name}</span></div>
+      <button onclick="logout()" class="text-xs text-textMuted hover:text-textPrimary border border-borderGray rounded-lg px-3 py-1.5">تسجيل الخروج</button>
+    </div>
+
+    <header class="bg-bgCard border border-borderGray rounded-2xl p-8 mb-6 text-center shadow-lg">
+      <h1 class="text-2xl md:text-3xl font-extrabold mb-3">استمارة حجز روب التخرج</h1>
+      <p class="text-textSecondary">ألف مبروك التخرج مقدماً! نتمنى لكم مستقبلاً زاهراً ومكللاً بالنجاح والتوفيق الدائم في حياتكم المهنية والعلمية.</p>
+    </header>
+
+    ${locked ? `
+    <div class="bg-bgInput2 border border-borderLight rounded-xl p-4 mb-6 text-center">
+      <p class="font-bold mb-1">✓ تم إرسال طلبك بنجاح</p>
+      <p class="text-xs text-textSecondary mb-3">يمكنك تعديل بياناتك وإعادة الإرسال إذا احتجت لتغيير أي شيء.</p>
+      <button onclick="STATE.editingUnlocked=true; renderForm();" class="text-xs bg-btnGray hover:bg-btnHover px-4 py-2 rounded-lg font-bold">تعديل الطلب</button>
+    </div>` : ''}
+
+    <form id="bookingForm" class="bg-bgCard border border-borderGray rounded-2xl p-6 md:p-8 shadow-lg ${locked?'opacity-60 pointer-events-none':''}">
+
+      <section class="mb-8 border-b border-borderGray pb-8">
+        <h3 class="text-lg font-bold text-textPrimary mb-4">المعلومات الشخصية للطالب</h3>
+        <div class="w-full md:w-1/2">
+          ${fieldLabel('الاسم الثلاثي', true)}
+          ${textInput('f_name','الاسم كما هو معتمد', s.student_name)}
+        </div>
+      </section>
+
+      <section class="mb-8 border-b border-borderGray pb-8">
+        <h3 class="text-lg font-bold text-textPrimary mb-2">القطع المطلوبة <span class="text-textPrimary">*</span></h3>
+        <p class="text-sm text-textSecondary mb-4">يمكنك اختيار أكثر من قطعة.</p>
+        ${pillGroup('pieces', ['روب','قبعة','وشاح','إطار في الردان','شرابة (كشكوشة)'], s.pieces)}
+      </section>
+
+      ${sectionCard('تفاصيل الروب', null, '', `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div>${fieldLabel('لون الروب')}${textInput('r_color','مثال: أسود، كحلي...', s.robe.color)}</div>
+          <div>${fieldLabel('موديل الروب')}${selectField('r_model',['عادي','كوري','خليجي','امريكي','كلوش'], s.robe.model)}</div>
+        </div>
+        <div class="mb-6">${fieldLabel('وضع إطار في الردان')}${radioPillGroup('robeFrame', ['نعم','لا'], s.robe.frameInSleeve)}</div>
+        <p class="text-sm font-bold text-textPrimary mb-3">قياسات الروب (بالسنتيمتر)</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div>${fieldLabel('طول الروب (من الكتف إلى أسفل الركبة بأصبعين)')}${textInput('r_total','', s.robe.totalLength, 'number')}</div>
+          <div>${fieldLabel('عرض الكتف (من رمانة الكتف الأيمن إلى الأيسر)')}${textInput('r_shoulder','', s.robe.shoulder, 'number')}</div>
+          <div>${fieldLabel('طول الردان (من رمانة الكتف إلى أسفل مفصل الساعد بأصبعين)')}${textInput('r_arm','', s.robe.armLength, 'number')}</div>
+          <div>${fieldLabel('محيط الصدر (دوران كامل على الصدر والظهر)')}${textInput('r_chest','', s.robe.chest, 'number')}</div>
+        </div>
+        <div class="mb-4">${fieldLabel('ملاحظات')}${textArea('r_notes', s.robe.notes)}</div>
+        <p class="text-sm font-bold text-textPrimary mb-2">صور مرفقة لنوع الإطار في الردان إن وُجد</p>
+        ${imagesUploader('robe')}
+      `)}
+
+      ${sectionCard('تفاصيل القبعة', null, '', `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div>${fieldLabel('نوع الطوق في القبعة من الأمام')}${selectField('c_collar',['ملكية (مثلثة)','دائرية'], s.cap.collarType)}</div>
+          <div>${fieldLabel('لون القبعة')}${textInput('c_color','مثال: أسود، كحلي...', s.cap.color)}</div>
+          <div>${fieldLabel('لون التطريز على القبعة')}${textInput('c_embcolor','مثال: ذهبي، فضي...', s.cap.embroideryColor)}</div>
+          <div>${fieldLabel('موقع التطريز في القبعة')}${selectField('c_embloc',['في الأعلى (أعلى مربع القبعة)','جانبي (في الطوق)','في زاوية مربع القبعة','في منتصف مربع القبعة'], s.cap.embroideryLocation)}</div>
+          <div>${fieldLabel('قياس دوران الرأس (إذا كان أصغر من 55 سم)')}${textInput('c_head','بالسنتيمتر', s.cap.headSize, 'number')}</div>
+        </div>
+        <div class="mb-4">${fieldLabel('ملاحظات')}${textArea('c_notes', s.cap.notes)}</div>
+        <p class="text-sm font-bold text-textPrimary mb-2">صور مرفقة لنوع الخط، تصميم معيّن، أو مكان التطريز</p>
+        ${imagesUploader('cap')}
+      `)}
+
+      ${sectionCard('تفاصيل الوشاح والتطريز', IMG_SCARF, 'دليل أرقام قصة الوشاح من الأمام', `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+          <div>${fieldLabel('نوع الوشاح (بناءً على الصورة)')}${selectField('sc_type',['رقم (1) - عدل','رقم (2) - ملكي','رقم (3) - امريكي','جانبي'], s.scarf.type)}</div>
+          <div>${fieldLabel('لون الوشاح')}${readOnlyField('ماروني (ثابت لكل الطلاب)')}</div>
+          <div class="md:col-span-2">${fieldLabel('لون التطريز')}${textInput('sc_embcolor','مثال: ذهبي، فضي...', s.scarf.embroideryColor)}</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div>${fieldLabel('الكتابة للجهة اليمين')}${textArea('sc_right', s.scarf.textRight)}</div>
+          <div>${fieldLabel('الكتابة للجهة اليسار')}${textArea('sc_left', s.scarf.textLeft)}</div>
+          <div>${fieldLabel('الكتابة على ظهر الوشاح')}${textArea('sc_back', s.scarf.textBack)}</div>
+        </div>
+        <div class="mb-4">${fieldLabel('ملاحظات')}${textArea('sc_notes', s.scarf.notes)}</div>
+      `)}
+
+      <section class="mb-2">
+        <h3 class="text-lg font-bold text-textPrimary mb-4">ملاحظات وصور عامة إضافية</h3>
+        <div class="mb-4">${fieldLabel('ملاحظات عامة')}${textArea('gen_notes', s.general.notes, 3)}</div>
+        ${imagesUploader('general')}
+      </section>
+
+      <div class="mt-8 pt-6 border-t border-borderGray">
+        <button type="button" onclick="openConfirm()" class="bg-btnGray hover:bg-btnHover text-white font-bold py-4 px-6 rounded-lg w-full transition-colors shadow-lg">
+          تأكيد وإرسال الطلب
+        </button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function openConfirm(){
+  collectFormValues();
+  if(!STATE.submission.student_name){ toast('الرجاء إدخال الاسم الثلاثي'); return; }
+  if(STATE.submission.pieces.length === 0){ toast('فضلاً اختر قطعة واحدة على الأقل'); return; }
+
+  const modal = document.createElement('div');
+  modal.id = 'confirmModal';
+  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4';
+  modal.innerHTML = `
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl fade-in">
+      <h3 class="text-lg font-bold mb-2">تأكيد الإرسال</h3>
+      <p class="text-sm text-textSecondary mb-6">هل أنت متأكد من صحة جميع التفاصيل قبل إرسال الطلب؟</p>
+      <div class="flex gap-3">
+        <button onclick="document.getElementById('confirmModal').remove()" class="flex-1 border border-borderGray rounded-lg py-2.5 text-sm font-bold text-textSecondary">رجوع</button>
+        <button id="confirmSendBtn" onclick="submitForm()" class="flex-1 bg-btnGray hover:bg-btnHover rounded-lg py-2.5 text-sm font-bold text-white">نعم، إرسال</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function submitForm(){
+  const btn = document.getElementById('confirmSendBtn');
+  btn.innerHTML = '<span class="spinner"></span>';
+  try{
+    STATE.submission.status = 'submitted';
+    STATE.submission.scarf.color = SCARF_FIXED_COLOR;
+    if(STATE.submissionId){
+      const { error } = await sb.from('submissions').update(STATE.submission).eq('id', STATE.submissionId);
+      if(error) throw error;
+      await logActivity('update', STATE.submission.student_name, {});
+    } else {
+      const { data, error } = await sb.from('submissions').insert(STATE.submission).select().limit(1);
+      if(error) throw error;
+      STATE.submissionId = data[0].id;
+      await logActivity('create', STATE.submission.student_name, {});
+    }
+    document.getElementById('confirmModal')?.remove();
+    STATE.submittedOnce = true;
+    STATE.editingUnlocked = false;
+    toast('تم استلام طلبك بنجاح ✓');
+    renderForm();
+  }catch(e){
+    console.error(e);
+    toast('صار خطأ أثناء الإرسال، حاول مرة أخرى');
+    btn.innerHTML = 'نعم، إرسال';
+  }
+}
+
+/* =====================================================================
+   لوحة الإدارة
+===================================================================== */
+async function loadAdminData(){
+  const [{ data: subs }, { data: assistants }, { data: logs }] = await Promise.all([
+    sb.from('submissions').select('*').order('updated_at', { ascending:false }),
+    sb.from('profiles').select('*').eq('role','assistant').order('created_at', { ascending:false }),
+    sb.from('activity_logs').select('*').order('created_at', { ascending:false }).limit(200)
+  ]);
+  STATE.adminList = subs || [];
+  STATE.assistants = assistants || [];
+  STATE.logs = logs || [];
+}
+
+function computeStats(){
+  const list = STATE.adminList;
+  const total = list.length;
+  const pieceCounts = {};
+  const modelCounts = {};
+  list.forEach(s=>{
+    (s.pieces||[]).forEach(p=> pieceCounts[p] = (pieceCounts[p]||0)+1);
+    const m = s.robe && s.robe.model;
+    if(m) modelCounts[m] = (modelCounts[m]||0)+1;
+  });
+  return { total, pieceCounts, modelCounts };
+}
+
+function roleLabel(r){ if(r==='leader') return 'القائد'; if(r==='assistant') return 'قائد مساعد'; return 'عضو'; }
+
+function renderAdmin(){
+  const root = document.getElementById('root');
+  const isLeader = STATE.user.role === 'leader';
+
+  root.innerHTML = `
+  <div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <div class="text-sm text-textSecondary">مرحباً، <span class="text-textPrimary font-bold">${STATE.user.name}</span> <span class="badge mr-2">${roleLabel(STATE.user.role)}</span></div>
+      <button onclick="doAdminLogout()" class="text-xs text-textMuted hover:text-textPrimary border border-borderGray rounded-lg px-3 py-1.5">تسجيل الخروج</button>
+    </div>
+
+    <header class="bg-bgCard border border-borderGray rounded-2xl p-6 mb-6 text-center shadow-lg">
+      <h1 class="text-xl md:text-2xl font-extrabold mb-1">لوحة إدارة طلبات التخرج</h1>
+      <p class="text-textSecondary text-sm">${STATE.adminList.length} طلب مسجّل</p>
+    </header>
+
+    <div class="flex flex-wrap bg-bgInput rounded-xl p-1 mb-6 gap-1 max-w-xl">
+      <button onclick="STATE.adminTab='subs'; renderAdmin();" class="tab-btn flex-1 py-2 rounded-lg text-sm font-bold text-textSecondary ${STATE.adminTab==='subs'?'active':''}">الطلبات</button>
+      <button onclick="STATE.adminTab='stats'; renderAdmin();" class="tab-btn flex-1 py-2 rounded-lg text-sm font-bold text-textSecondary ${STATE.adminTab==='stats'?'active':''}">الإحصائيات</button>
+      <button onclick="STATE.adminTab='logs'; renderAdmin();" class="tab-btn flex-1 py-2 rounded-lg text-sm font-bold text-textSecondary ${STATE.adminTab==='logs'?'active':''}">سجل التعديلات</button>
+      ${isLeader ? `<button onclick="STATE.adminTab='assistants'; renderAdmin();" class="tab-btn flex-1 py-2 rounded-lg text-sm font-bold text-textSecondary ${STATE.adminTab==='assistants'?'active':''}">القادة المساعدون</button>` : ''}
+    </div>
+
+    ${STATE.adminTab==='subs' ? renderSubsTab() : ''}
+    ${STATE.adminTab==='stats' ? renderStatsTab() : ''}
+    ${STATE.adminTab==='logs' ? renderLogsTab() : ''}
+    ${STATE.adminTab==='assistants' && isLeader ? renderAssistantsTab() : ''}
+  </div>`;
+}
+
+async function doAdminLogout(){
+  try{ await sb.auth.signOut(); }catch(e){}
+  STATE.authUser = null; STATE.user = null; STATE.view = 'auth';
+  renderAuth();
+}
+
+function renderSubsTab(){
+  if(STATE.adminList.length===0){
+    return `<div class="bg-bgCard border border-borderGray rounded-2xl p-10 text-center text-textSecondary">لا توجد طلبات مسجّلة بعد</div>`;
+  }
+  const rows = STATE.adminList.map((item,i)=>`
+    <tr class="border-b border-borderGray last:border-0 hover:bg-bgInput/40">
+      <td class="p-3 text-sm font-bold cursor-pointer" onclick="openDetail(${i})">${item.student_name || '(بدون اسم)'}</td>
+      <td class="p-3 text-xs text-textSecondary cursor-pointer" onclick="openDetail(${i})">${(item.pieces||[]).join('، ') || '-'}</td>
+      <td class="p-3 text-xs text-textMuted cursor-pointer" onclick="openDetail(${i})">${item.updated_at ? new Date(item.updated_at).toLocaleDateString('ar') : '-'}</td>
+      <td class="p-3 text-left whitespace-nowrap">
+        <button onclick="printSubmission(${i})" class="text-xs border border-borderGray hover:border-borderLight rounded-lg px-3 py-1.5 text-textSecondary ml-2">PDF</button>
+        <button onclick="deleteSubmission(${i})" class="text-xs border border-borderGray hover:border-borderLight rounded-lg px-3 py-1.5 text-textSecondary">حذف</button>
+      </td>
+    </tr>`).join('');
+
+  return `
+  <div class="bg-bgCard border border-borderGray rounded-2xl overflow-hidden shadow-lg">
+    <div class="overflow-x-auto scrollbar-thin">
+      <table class="w-full text-right">
+        <thead class="bg-bgInput/60">
+          <tr class="text-xs text-textMuted">
+            <th class="p-3 font-bold">الاسم</th><th class="p-3 font-bold">القطع</th><th class="p-3 font-bold">آخر تحديث</th><th class="p-3"></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderStatsTab(){
+  const st = computeStats();
+  const pieceRows = Object.entries(st.pieceCounts).map(([k,v])=>`
+    <div class="flex justify-between items-center bg-bgInput/60 rounded-lg px-4 py-2.5 mb-2">
+      <span class="text-sm text-textSecondary">${k}</span><span class="font-bold">${v}</span>
+    </div>`).join('') || '<p class="text-xs text-textMuted">لا توجد بيانات بعد</p>';
+  const modelRows = Object.entries(st.modelCounts).map(([k,v])=>`
+    <div class="flex justify-between items-center bg-bgInput/60 rounded-lg px-4 py-2.5 mb-2">
+      <span class="text-sm text-textSecondary">${k}</span><span class="font-bold">${v}</span>
+    </div>`).join('') || '<p class="text-xs text-textMuted">لا توجد بيانات بعد</p>';
+
+  return `
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 text-center shadow-lg">
+      <p class="text-3xl font-extrabold">${st.total}</p>
+      <p class="text-xs text-textSecondary mt-1">إجمالي الطلبات</p>
+    </div>
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 text-center shadow-lg">
+      <p class="text-3xl font-extrabold">${STATE.assistants.length}</p>
+      <p class="text-xs text-textSecondary mt-1">القادة المساعدون</p>
+    </div>
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 text-center shadow-lg">
+      <p class="text-3xl font-extrabold">${STATE.logs.length}</p>
+      <p class="text-xs text-textSecondary mt-1">عمليات مسجّلة بالسجل</p>
+    </div>
+  </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 shadow-lg">
+      <p class="font-bold mb-3">توزيع القطع المطلوبة</p>
+      ${pieceRows}
+    </div>
+    <div class="bg-bgCard border border-borderGray rounded-2xl p-6 shadow-lg">
+      <p class="font-bold mb-3">توزيع موديلات الروب</p>
+      ${modelRows}
+    </div>
+  </div>`;
+}
+
+function renderLogsTab(){
+  if(!STATE.logs.length){
+    return `<div class="bg-bgCard border border-borderGray rounded-2xl p-10 text-center text-textSecondary">لا يوجد سجل تعديلات بعد</div>`;
+  }
+  const actionLabel = a => a==='create' ? 'إنشاء' : a==='update' ? 'تعديل' : a==='delete' ? 'حذف' : a;
+  const rows = STATE.logs.map(l=>`
+    <tr class="border-b border-borderGray last:border-0">
+      <td class="p-3 text-sm font-bold">${l.actor_name||'-'}</td>
+      <td class="p-3 text-xs"><span class="badge">${roleLabel(l.actor_role)}</span></td>
+      <td class="p-3 text-xs text-textSecondary">${actionLabel(l.action)}</td>
+      <td class="p-3 text-xs text-textSecondary">${l.target_student||'-'}</td>
+      <td class="p-3 text-xs text-textMuted">${l.created_at ? new Date(l.created_at).toLocaleString('ar') : '-'}</td>
+    </tr>`).join('');
+  return `
+  <div class="bg-bgCard border border-borderGray rounded-2xl overflow-hidden shadow-lg">
+    <div class="overflow-x-auto scrollbar-thin">
+      <table class="w-full text-right">
+        <thead class="bg-bgInput/60">
+          <tr class="text-xs text-textMuted"><th class="p-3 font-bold">مين سوّى العملية</th><th class="p-3 font-bold">الصلاحية</th><th class="p-3 font-bold">العملية</th><th class="p-3 font-bold">الطالب</th><th class="p-3 font-bold">الوقت</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderAssistantsTab(){
+  const rows = STATE.assistants.map(a=>`
+    <tr class="border-b border-borderGray last:border-0">
+      <td class="p-3 text-sm font-bold">${a.full_name}</td>
+      <td class="p-3"><span class="badge">قائد مساعد</span></td>
+      <td class="p-3 text-left">
+        <button onclick="removeAssistant('${a.id}')" class="text-xs border border-borderGray hover:border-borderLight rounded-lg px-3 py-1.5 text-textSecondary">إلغاء الصلاحية</button>
+      </td>
+    </tr>`).join('');
+  return `
+  <div class="bg-bgCard border border-borderGray rounded-2xl p-6 mb-6 shadow-lg">
+    <p class="text-sm font-bold text-textPrimary mb-2">تعيين قائد مساعد جديد</p>
+    <p class="text-xs text-textSecondary mb-4 leading-6">
+      الخطوات: (1) روح لوحة Supabase ← Authentication ← Users ← Add User، وسوّي بريد وكلمة مرور للشخص (فعّل Auto Confirm User).
+      (2) انسخ الـ User UID الظاهر له. (3) الصقه هنا مع اسمه الثلاثي واضغط تعيين.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+      ${textInput('new_asst_name','الاسم الثلاثي')}
+      ${textInput('new_asst_uid','User UID من Supabase')}
+    </div>
+    <button onclick="addAssistant()" class="bg-btnGray hover:bg-btnHover text-white font-bold px-5 py-2.5 rounded-lg">تعيين قائد مساعد</button>
+  </div>
+  <div class="bg-bgCard border border-borderGray rounded-2xl overflow-hidden shadow-lg">
+    <div class="overflow-x-auto scrollbar-thin">
+      <table class="w-full text-right">
+        <thead class="bg-bgInput/60"><tr class="text-xs text-textMuted"><th class="p-3 font-bold">الاسم</th><th class="p-3 font-bold">الصلاحية</th><th class="p-3"></th></tr></thead>
+        <tbody>${rows || `<tr><td class="p-4 text-xs text-textMuted" colspan="3">لا يوجد قادة مساعدون بعد</td></tr>`}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function addAssistant(){
+  const name = normalizeName(document.getElementById('new_asst_name').value);
+  const uid = document.getElementById('new_asst_uid').value.trim();
+  if(!name || !uid){ toast('اكتب الاسم والـ UID'); return; }
+  try{
+    const { error } = await sb.from('profiles').insert({ auth_user_id: uid, full_name: name, role: 'assistant' });
+    if(error) throw error;
+    toast('تم تعيين ' + name + ' كقائد مساعد');
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){
+    console.error(e);
+    toast('تعذّر التعيين — تأكد إن الـ UID صحيح وغير مستخدم من قبل');
+  }
+}
+
+async function removeAssistant(profileId){
+  if(!confirm('هل تريد إلغاء صلاحية هذا القائد المساعد؟')) return;
+  try{
+    const { error } = await sb.from('profiles').delete().eq('id', profileId);
+    if(error) throw error;
+    toast('تم إلغاء الصلاحية');
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){ console.error(e); toast('تعذّر الإلغاء'); }
+}
+
+async function deleteSubmission(i){
+  const item = STATE.adminList[i];
+  if(!confirm('هل تريد حذف طلب ' + (item.student_name || 'هذا الطالب') + '؟')) return;
+  try{
+    const { error } = await sb.from('submissions').delete().eq('id', item.id);
+    if(error) throw error;
+    await logActivity('delete', item.student_name, {});
+    toast('تم حذف الطلب');
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){ console.error(e); toast('تعذّر الحذف'); }
+}
+
+/* =====================================================================
+   مودال تعديل الطلب
+===================================================================== */
+function openDetail(i){
+  const item = STATE.adminList[i];
+  STATE.editingId = item.id;
+  STATE.activeSubmission = JSON.parse(JSON.stringify(item));
+  if(!STATE.activeSubmission.scarf) STATE.activeSubmission.scarf = { type:'', color: SCARF_FIXED_COLOR, embroideryColor:'', textRight:'', textLeft:'', textBack:'', notes:'', images:[] };
+  STATE.activeRerender = renderDetailModal;
+  const modal = document.createElement('div');
+  modal.id = 'detailModal';
+  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4';
+  document.body.appendChild(modal);
+  renderDetailModal();
+}
+
+function closeDetail(){
+  document.getElementById('detailModal')?.remove();
+  STATE.activeSubmission = null; STATE.activeRerender = null; STATE.editingId = null;
+}
+
+function renderDetailModal(){
+  const modal = document.getElementById('detailModal');
+  if(!modal) return;
+  const s = STATE.activeSubmission;
+  modal.innerHTML = `
+  <div class="bg-bgCard border border-borderGray rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-thin p-6 shadow-2xl fade-in">
+    <div class="flex justify-between items-start mb-6">
+      <h3 class="text-lg font-bold">تعديل طلب: ${s.student_name || '(بدون اسم)'}</h3>
+      <button onclick="closeDetail()" class="text-textMuted hover:text-textPrimary text-xl leading-none">×</button>
+    </div>
+
+    <div class="mb-6 border-b border-borderGray pb-6">
+      ${fieldLabel('الاسم الثلاثي', true)}${textInput('f_name','', s.student_name)}
+    </div>
+    <div class="mb-6 border-b border-borderGray pb-6">
+      <p class="text-sm font-bold text-textPrimary mb-3">القطع المطلوبة</p>
+      ${pillGroup('pieces', ['روب','قبعة','وشاح','إطار في الردان','شرابة (كشكوشة)'], s.pieces)}
+    </div>
+
+    ${sectionCard('تفاصيل الروب', null, '', `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>${fieldLabel('لون الروب')}${textInput('r_color','', s.robe.color)}</div>
+        <div>${fieldLabel('موديل الروب')}${selectField('r_model',['عادي','كوري','خليجي','امريكي','كلوش'], s.robe.model)}</div>
+      </div>
+      <div class="mb-6">${fieldLabel('وضع إطار في الردان')}${radioPillGroup('robeFrame', ['نعم','لا'], s.robe.frameInSleeve)}</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>${fieldLabel('طول الروب')}${textInput('r_total','', s.robe.totalLength, 'number')}</div>
+        <div>${fieldLabel('عرض الكتف')}${textInput('r_shoulder','', s.robe.shoulder, 'number')}</div>
+        <div>${fieldLabel('طول الردان')}${textInput('r_arm','', s.robe.armLength, 'number')}</div>
+        <div>${fieldLabel('محيط الصدر')}${textInput('r_chest','', s.robe.chest, 'number')}</div>
+      </div>
+      <div class="mb-4">${fieldLabel('ملاحظات')}${textArea('r_notes', s.robe.notes)}</div>
+      ${imagesUploader('robe')}
+    `)}
+
+    ${sectionCard('تفاصيل القبعة', null, '', `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>${fieldLabel('نوع الطوق')}${selectField('c_collar',['ملكية (مثلثة)','دائرية'], s.cap.collarType)}</div>
+        <div>${fieldLabel('لون القبعة')}${textInput('c_color','', s.cap.color)}</div>
+        <div>${fieldLabel('لون التطريز على القبعة')}${textInput('c_embcolor','', s.cap.embroideryColor)}</div>
+        <div>${fieldLabel('موقع التطريز')}${selectField('c_embloc',['في الأعلى (أعلى مربع القبعة)','جانبي (في الطوق)','في زاوية مربع القبعة','في منتصف مربع القبعة'], s.cap.embroideryLocation)}</div>
+        <div>${fieldLabel('قياس دوران الرأس')}${textInput('c_head','', s.cap.headSize, 'number')}</div>
+      </div>
+      <div class="mb-4">${fieldLabel('ملاحظات')}${textArea('c_notes', s.cap.notes)}</div>
+      ${imagesUploader('cap')}
+    `)}
+
+    ${sectionCard('تفاصيل الوشاح والتطريز', null, '', `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>${fieldLabel('نوع الوشاح')}${selectField('sc_type',['رقم (1) - عدل','رقم (2) - ملكي','رقم (3) - امريكي','جانبي'], s.scarf.type)}</div>
+        <div>${fieldLabel('لون الوشاح')}${readOnlyField('ماروني (ثابت)')}</div>
+        <div class="md:col-span-2">${fieldLabel('لون التطريز')}${textInput('sc_embcolor','', s.scarf.embroideryColor)}</div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div>${fieldLabel('الكتابة للجهة اليمين')}${textArea('sc_right', s.scarf.textRight)}</div>
+        <div>${fieldLabel('الكتابة للجهة اليسار')}${textArea('sc_left', s.scarf.textLeft)}</div>
+        <div>${fieldLabel('الكتابة على ظهر الوشاح')}${textArea('sc_back', s.scarf.textBack)}</div>
+      </div>
+      <div class="mb-2">${fieldLabel('ملاحظات')}${textArea('sc_notes', s.scarf.notes)}</div>
+    `)}
+
+    <div class="mb-2">
+      <p class="text-sm font-bold text-textPrimary mb-3">ملاحظات وصور عامة إضافية</p>
+      <div class="mb-4">${fieldLabel('ملاحظات عامة')}${textArea('gen_notes', s.general.notes, 3)}</div>
+      ${imagesUploader('general')}
+    </div>
+
+    <div class="flex gap-3 mt-6 pt-6 border-t border-borderGray">
+      <button onclick="deleteFromModal()" class="border border-borderGray hover:border-borderLight text-textSecondary font-bold py-3 rounded-lg flex-1">حذف الطلب</button>
+      <button onclick="saveAdminEdit()" class="bg-btnGray hover:bg-btnHover text-white font-bold py-3 rounded-lg flex-[2]">حفظ التعديلات</button>
+    </div>
+  </div>`;
+}
+
+async function saveAdminEdit(){
+  collectFormValues();
+  const s = STATE.activeSubmission;
+  if(!s.student_name){ toast('الرجاء إدخال الاسم الثلاثي'); return; }
+  try{
+    s.scarf.color = SCARF_FIXED_COLOR;
+    const payload = { student_name: s.student_name, pieces: s.pieces, robe: s.robe, cap: s.cap, scarf: s.scarf, general: s.general, status: s.status };
+    const { error } = await sb.from('submissions').update(payload).eq('id', STATE.editingId);
+    if(error) throw error;
+    await logActivity('update', s.student_name, {});
+    toast('تم حفظ التعديلات');
+    closeDetail();
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){ console.error(e); toast('تعذّر الحفظ'); }
+}
+
+async function deleteFromModal(){
+  const s = STATE.activeSubmission;
+  if(!confirm('هل تريد حذف طلب ' + (s.student_name || 'هذا الطالب') + '؟')) return;
+  try{
+    const { error } = await sb.from('submissions').delete().eq('id', STATE.editingId);
+    if(error) throw error;
+    await logActivity('delete', s.student_name, {});
+    toast('تم حذف الطلب');
+    closeDetail();
+    await loadAdminData();
+    renderAdmin();
+  }catch(e){ console.error(e); toast('تعذّر الحذف'); }
+}
+
+/* =====================================================================
+   طباعة PDF
+===================================================================== */
+function printSubmission(i){
+  const d = STATE.adminList[i];
+  const imgTags = arr => (arr&&arr.length) ? arr.map(src=>`<img src="${src}">`).join('') : '<span style="font-size:12px;color:#666">لا توجد صور</span>';
+  const html = `
+    <h1>استمارة حجز زي التخرج</h1>
+    <p style="font-size:13px;color:#333;margin-bottom:14px;">تاريخ الطباعة: ${new Date().toLocaleDateString('ar')}</p>
+    <table>
+      <tr><th>الاسم الثلاثي</th><td>${d.student_name||'-'}</td></tr>
+      <tr><th>القطع المطلوبة</th><td>${(d.pieces||[]).join('، ')||'-'}</td></tr>
+    </table>
+
+    <h2>تفاصيل الروب</h2>
+    <table>
+      <tr><th>اللون</th><td>${d.robe.color||'-'}</td><th>الموديل</th><td>${d.robe.model||'-'}</td></tr>
+      <tr><th>إطار بالردان</th><td>${d.robe.frameInSleeve||'-'}</td><th>طول الروب</th><td>${d.robe.totalLength||'-'} سم</td></tr>
+      <tr><th>عرض الكتف</th><td>${d.robe.shoulder||'-'} سم</th><th>طول الردان</th><td>${d.robe.armLength||'-'} سم</td></tr>
+      <tr><th>محيط الصدر</th><td>${d.robe.chest||'-'} سم</td><th>ملاحظات</th><td>${d.robe.notes||'-'}</td></tr>
+    </table>
+    ${imgTags(d.robe.images)}
+
+    <h2>تفاصيل القبعة</h2>
+    <table>
+      <tr><th>نوع الطوق</th><td>${d.cap.collarType||'-'}</td><th>اللون</th><td>${d.cap.color||'-'}</td></tr>
+      <tr><th>لون التطريز</th><td>${d.cap.embroideryColor||'-'}</td><th>موقع التطريز</th><td>${d.cap.embroideryLocation||'-'}</td></tr>
+      <tr><th>دوران الرأس</th><td>${d.cap.headSize||'-'}</td><th>ملاحظات</th><td>${d.cap.notes||'-'}</td></tr>
+    </table>
+    ${imgTags(d.cap.images)}
+
+    <h2>تفاصيل الوشاح والتطريز</h2>
+    <table>
+      <tr><th>النوع</th><td>${d.scarf.type||'-'}</td><th>اللون</th><td>ماروني</td></tr>
+      <tr><th>لون التطريز</th><td>${d.scarf.embroideryColor||'-'}</td><th>ملاحظات</th><td>${d.scarf.notes||'-'}</td></tr>
+      <tr><th>الكتابة يمين</th><td>${d.scarf.textRight||'-'}</td><th>الكتابة يسار</th><td>${d.scarf.textLeft||'-'}</td></tr>
+      <tr><th>الكتابة خلف</th><td colspan="3">${d.scarf.textBack||'-'}</td></tr>
+    </table>
+
+    ${(d.general.notes || (d.general.images&&d.general.images.length)) ? `
+    <h2>ملاحظات عامة</h2>
+    <p style="font-size:13px;">${d.general.notes||'-'}</p>
+    ${imgTags(d.general.images)}` : ''}
+  `;
+  document.getElementById('printArea').innerHTML = html;
+  document.body.classList.add('printing');
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=> document.body.classList.remove('printing'), 500);
+  }, 100);
+}
+
+/* =====================================================================
+   صورة مرجعية للوشاح
+===================================================================== */
+const IMG_SCARF = "data:image/jpeg;base64,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";
+
+/* =====================================================================
+   بدء التشغيل
+===================================================================== */
+renderAuth();
+</script>
+</body>
+</html>
